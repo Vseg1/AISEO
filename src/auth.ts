@@ -17,7 +17,9 @@ export const authProviders = {
     process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET,
   ),
   resend: Boolean(process.env.RESEND_API_KEY),
-  dev: process.env.NODE_ENV === "development",
+  dev:
+    process.env.NODE_ENV === "development" ||
+    process.env.AUTH_DEV_LOGIN === "true",
 };
 
 const providers: NextAuthConfig["providers"] = [];

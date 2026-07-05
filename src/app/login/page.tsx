@@ -64,17 +64,21 @@ export default async function LoginPage({
           {authProviders.dev && (
             <form action={signInWithDev} className="space-y-3">
               <div className="space-y-2">
-                <Label htmlFor="dev-email">Dev login (local)</Label>
+                <Label htmlFor="dev-email">
+                  {process.env.NODE_ENV === "development"
+                    ? "Dev login (local)"
+                    : "Connexion par email"}
+                </Label>
                 <Input
                   id="dev-email"
                   name="email"
                   type="email"
                   required
-                  placeholder="dev@local.test"
+                  placeholder="vous@entreprise.com"
                 />
               </div>
               <Button type="submit" variant="secondary" className="w-full">
-                Dev login
+                Se connecter
               </Button>
             </form>
           )}
@@ -106,15 +110,15 @@ export default async function LoginPage({
 
           {!hasOAuth && authProviders.dev && (
             <p className="text-xs text-muted-foreground">
-              Mode dev : entrez n&apos;importe quel email pour vous connecter.
-              Ajoutez AUTH_GOOGLE_* ou RESEND_API_KEY pour d&apos;autres méthodes.
+              Entrez votre email pour vous connecter. Configurez Google OAuth ou
+              Resend pour une authentification sécurisée en production.
             </p>
           )}
 
           {!authProviders.dev && !hasOAuth && (
             <p className="text-sm text-destructive">
-              Aucune méthode de connexion configurée. Ajoutez AUTH_GOOGLE_* ou
-              RESEND_API_KEY dans .env.local.
+              Aucune méthode de connexion configurée. Ajoutez AUTH_GOOGLE_*,
+              RESEND_API_KEY ou AUTH_DEV_LOGIN=true sur Vercel.
             </p>
           )}
         </CardContent>
