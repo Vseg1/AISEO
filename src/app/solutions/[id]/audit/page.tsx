@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { runAuditAction } from "@/lib/actions";
+import { runAuditAction, generateAuditReportAction } from "@/lib/actions";
 import type { TechnicalChecks } from "@/lib/audit/engine";
 
 export const dynamic = "force-dynamic";
@@ -39,12 +39,19 @@ export default async function AuditPage({
         <h1 className="text-2xl font-bold">Audit — {data.solution.name}</h1>
         <SolutionNav id={id} />
 
-        <div className="mt-6 flex gap-3">
+        <div className="mt-6 flex flex-wrap gap-3">
           <form action={runAuditAction.bind(null, id)}>
             <SubmitButton pendingLabel="Audit en cours…">
               {audit ? "Relancer l'audit" : "Lancer l'audit"}
             </SubmitButton>
           </form>
+          {audit && (
+            <form action={generateAuditReportAction.bind(null, id)}>
+              <SubmitButton pendingLabel="Génération…" variant="outline">
+                Générer le rapport d&apos;audit
+              </SubmitButton>
+            </form>
+          )}
         </div>
 
         {!audit ? (

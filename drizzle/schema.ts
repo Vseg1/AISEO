@@ -30,6 +30,7 @@ export const assetTypeEnum = pgEnum("asset_type", [
   "faq_draft",
   "comparison_draft",
   "robots_txt",
+  "audit_report",
 ]);
 
 export const users = pgTable("users", {

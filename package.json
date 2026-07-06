@@ -12,7 +12,8 @@
     "db:studio": "drizzle-kit studio",
     "test:audit": "tsx scripts/test-audit.ts",
     "test:reco": "tsx scripts/test-recommendations.ts",
-    "test:monitor": "tsx scripts/test-monitor.ts"
+    "test:monitor": "tsx scripts/test-monitor.ts",
+    "test:audit-report": "tsx scripts/test-audit-report.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",

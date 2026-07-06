@@ -15,6 +15,7 @@ import { CopyButton } from "./copy-button";
 export const dynamic = "force-dynamic";
 
 const ASSET_TYPES = [
+  { type: "audit_report" as const, label: "Rapport d'audit global" },
   { type: "llms_txt" as const, label: "llms.txt" },
   { type: "robots_txt" as const, label: "robots.txt" },
   { type: "schema_software" as const, label: "Schema SoftwareApplication" },
@@ -24,6 +25,7 @@ const ASSET_TYPES = [
 ];
 
 const ASSET_FILENAMES: Record<string, string> = {
+  audit_report: "rapport-audit.md",
   llms_txt: "llms.txt",
   robots_txt: "robots.txt",
   schema_software: "schema-software.json",

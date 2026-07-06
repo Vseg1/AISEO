@@ -38,7 +38,9 @@ import {
   computeShareOfVoice,
   computePlatformSov,
 } from "@/lib/monitor/platforms";
-import { getSolutionForUser } from "@/lib/db/queries";
+import { getSolutionForUser, getLatestAudit, getRecommendations, getVisibilityHistory } from "@/lib/db/queries";
+import { generateAuditReport } from "@/lib/generate/audit-report";
+import type { TechnicalChecks } from "@/lib/audit/engine";
 
 const solutionSchema = z.object({
   name: z.string().min(1),
@@ -474,6 +476,107 @@ export async function generateAssetAction(
   }
 
   revalidatePath(`/solutions/${solutionId}/assets`);
+}
+
+/** Génère le rapport d'audit global (markdown) et le sauvegarde dans les assets. */
+export async function generateAuditReportAction(solutionId: string) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Non authentifié");
+
+  const db = getDb();
+  const solution = await getSolutionForUser(solutionId, session.user.id);
+  if (!solution) throw new Error("Solution introuvable");
+
+  const audit = await getLatestAudit(solutionId, session.user.id);
+  if (!audit) throw new Error("Lancez un audit avant de générer le rapport.");
+
+  const [comps, queries, recs, history] = await Promise.all([
+    db.select().from(competitors).where(eq(competitors.solutionId, solutionId)),
+    db.select().from(targetQueries).where(eq(targetQueries.solutionId, solutionId)),
+    getRecommendations(solutionId, session.user.id),
+    getVisibilityHistory(solutionId, session.user.id),
+  ]);
+
+  const checks = audit.technicalChecks as TechnicalChecks;
+  const monitoring = history.selectedRun
+    ? {
+        shareOfVoice: history.selectedRun.shareOfVoice,
+        ranAt: history.selectedRun.ranAt,
+        platformSov: (history.selectedRun.platformSov ?? {}) as Record<string, number>,
+        note: history.selectedRun.note,
+        results: history.selectedResults
+          .filter((r) => r.configured !== false)
+          .map((r) => ({
+            platform: r.platform,
+            query: r.query,
+            mentioned: r.mentioned ?? false,
+            competitorsMentioned: (r.competitorsMentioned ?? []) as string[],
+          })),
+      }
+    : undefined;
+
+  const content = generateAuditReport({
+    solution: {
+      name: solution.name,
+      url: solution.url,
+      type: solution.type,
+      language: solution.language,
+      description: solution.description,
+      category: solution.category,
+      markets: solution.markets ?? [],
+      personas: solution.personas ?? [],
+      useCases: solution.useCases ?? [],
+      integrations: solution.integrations ?? [],
+    },
+    audit: {
+      overallScore: audit.overallScore,
+      ranAt: audit.ranAt,
+      pipelineScores: (audit.pipelineScores ?? {}) as Record<string, number>,
+      platformScores: (audit.platformScores ?? {}) as Record<string, number>,
+      semanticScores: (audit.semanticScores ?? {}) as Record<string, number>,
+      technicalChecks: checks,
+    },
+    queries: queries.map((q) => q.query),
+    competitors: comps,
+    recommendations: recs.map((r) => ({
+      title: r.title,
+      description: r.description,
+      tier: r.tier,
+      effort: r.effort,
+      priority: r.priority,
+      status: r.status,
+      assetType: r.assetType,
+    })),
+    monitoring,
+  });
+
+  const title = `Rapport d'audit — ${solution.name}`;
+  const [existing] = await db
+    .select({ id: generatedAssets.id })
+    .from(generatedAssets)
+    .where(
+      and(
+        eq(generatedAssets.solutionId, solutionId),
+        eq(generatedAssets.type, "audit_report"),
+      ),
+    );
+
+  if (existing) {
+    await db
+      .update(generatedAssets)
+      .set({ title, content, updatedAt: new Date() })
+      .where(eq(generatedAssets.id, existing.id));
+  } else {
+    await db.insert(generatedAssets).values({
+      solutionId,
+      type: "audit_report",
+      title,
+      content,
+    });
+  }
+
+  revalidatePath(`/solutions/${solutionId}/assets`);
+  revalidatePath(`/solutions/${solutionId}/audit`);
 }
 
 /** Génère l'asset lié à une reco depuis la page recommandations. */
