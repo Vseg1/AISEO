@@ -98,6 +98,7 @@ export const solutions = pgTable("solutions", {
   useCases: jsonb("use_cases").$type<string[]>().default([]),
   integrations: jsonb("integrations").$type<string[]>().default([]),
   keyPages: jsonb("key_pages").$type<Record<string, string>>().default({}),
+  monitoringEnabled: boolean("monitoring_enabled").default(true).notNull(),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
 });
@@ -166,6 +167,8 @@ export const visibilityRuns = pgTable("visibility_runs", {
     .notNull()
     .references(() => solutions.id, { onDelete: "cascade" }),
   shareOfVoice: integer("share_of_voice"),
+  platformSov: jsonb("platform_sov").$type<Record<string, number>>().default({}),
+  note: text("note"),
   ranAt: timestamp("ran_at", { mode: "date" }).defaultNow().notNull(),
 });
 
@@ -177,6 +180,7 @@ export const visibilityResults = pgTable("visibility_results", {
   platform: text("platform").notNull(),
   query: text("query").notNull(),
   mentioned: boolean("mentioned").default(false),
+  configured: boolean("configured").default(true),
   mentionRank: integer("mention_rank"),
   sources: jsonb("sources").$type<string[]>().default([]),
   competitorsMentioned: jsonb("competitors_mentioned")

@@ -1,5 +1,7 @@
 "use client";
 
+import { useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { generateAssetAction } from "@/lib/actions";
 
@@ -18,19 +20,28 @@ export function AssetGeneratorButtons({
   solutionId: string;
   types: { type: AssetType; label: string }[];
 }) {
+  const [pending, startTransition] = useTransition();
   return (
     <div className="flex flex-wrap gap-2">
       {types.map(({ type, label }) => (
-        <form
+        <Button
           key={type}
-          action={async () => {
-            await generateAssetAction(solutionId, type);
-          }}
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          onClick={() =>
+            startTransition(async () => {
+              try {
+                await generateAssetAction(solutionId, type);
+                toast.success(`${label} généré`);
+              } catch {
+                toast.error(`Échec de la génération de ${label}`);
+              }
+            })
+          }
         >
-          <Button type="submit" variant="outline" size="sm">
-            Générer {label}
-          </Button>
-        </form>
+          Générer {label}
+        </Button>
       ))}
     </div>
   );

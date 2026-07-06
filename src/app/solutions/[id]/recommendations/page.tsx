@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { auth } from "@/auth";
 import { redirect, notFound } from "next/navigation";
 import { getSolutionForUser, getRecommendations } from "@/lib/db/queries";
@@ -11,8 +10,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { updateRecommendationStatus } from "@/lib/actions";
+import { Button } from "@/components/ui/button";
+import {
+  updateRecommendationStatus,
+  generateAssetFromRecommendation,
+  type AssetType,
+} from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -65,26 +68,47 @@ export default async function RecommendationsPage({
                   </div>
                   <CardDescription>{r.description}</CardDescription>
                 </CardHeader>
-                <CardContent className="flex gap-2">
-                  <form
-                    action={updateRecommendationStatus.bind(
-                      null,
-                      r.id,
-                      id,
-                      "done",
-                    )}
-                  >
-                    <Button type="submit" size="sm" variant="outline">
-                      Marquer fait
-                    </Button>
-                  </form>
-                  {r.assetType && (
-                    <Link
-                      href={`/solutions/${id}/assets`}
-                      className={buttonVariants({ size: "sm", variant: "link" })}
+                <CardContent className="flex flex-wrap gap-2">
+                  {r.status !== "done" && (
+                    <form
+                      action={updateRecommendationStatus.bind(
+                        null,
+                        r.id,
+                        id,
+                        "done",
+                      )}
                     >
-                      Générer asset →
-                    </Link>
+                      <Button type="submit" size="sm" variant="outline">
+                        Marquer fait
+                      </Button>
+                    </form>
+                  )}
+                  {r.status === "pending" && (
+                    <form
+                      action={updateRecommendationStatus.bind(
+                        null,
+                        r.id,
+                        id,
+                        "skipped",
+                      )}
+                    >
+                      <Button type="submit" size="sm" variant="ghost">
+                        Ignorer
+                      </Button>
+                    </form>
+                  )}
+                  {r.assetType && (
+                    <form
+                      action={generateAssetFromRecommendation.bind(
+                        null,
+                        id,
+                        r.assetType as AssetType,
+                      )}
+                    >
+                      <Button type="submit" size="sm" variant="secondary">
+                        Générer l&apos;asset →
+                      </Button>
+                    </form>
                   )}
                 </CardContent>
               </Card>

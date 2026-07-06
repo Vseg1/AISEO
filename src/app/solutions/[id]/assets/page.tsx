@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
 import { AssetGeneratorButtons } from "./asset-buttons";
+import { CopyButton } from "./copy-button";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,25 @@ const ASSET_TYPES = [
   { type: "schema_faq" as const, label: "Schema FAQPage" },
   { type: "faq_draft" as const, label: "Brouillon FAQ" },
   { type: "comparison_draft" as const, label: "Brouillon comparatif" },
+];
+
+const ASSET_FILENAMES: Record<string, string> = {
+  llms_txt: "llms.txt",
+  robots_txt: "robots.txt",
+  schema_software: "schema-software.json",
+  schema_faq: "schema-faq.json",
+  faq_draft: "faq.md",
+  comparison_draft: "comparatif.md",
+};
+
+const DEPLOY_CHECKLIST = [
+  "llms.txt publié à la racine (/llms.txt)",
+  "robots.txt mis à jour (bots IA autorisés)",
+  "JSON-LD SoftwareApplication injecté dans le <head>",
+  "JSON-LD FAQPage injecté sur la page FAQ",
+  "Page FAQ publiée et liée depuis la homepage",
+  "Page comparatif publiée avec date de mise à jour visible",
+  "sitemap.xml à jour et soumis à Google Search Console",
 ];
 
 export default async function AssetsPage({
@@ -56,14 +76,22 @@ export default async function AssetsPage({
             assets.map((a) => (
               <Card key={a.id}>
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">{a.title}</CardTitle>
-                  <a
-                    href={`data:text/plain;charset=utf-8,${encodeURIComponent(a.content)}`}
-                    download={`${a.type}.txt`}
-                    className={buttonVariants({ variant: "outline", size: "sm" })}
-                  >
-                    Télécharger
-                  </a>
+                  <div>
+                    <CardTitle className="text-base">{a.title}</CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Mis à jour : {a.updatedAt.toISOString().slice(0, 10)}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <CopyButton content={a.content} />
+                    <a
+                      href={`data:text/plain;charset=utf-8,${encodeURIComponent(a.content)}`}
+                      download={ASSET_FILENAMES[a.type] ?? `${a.type}.txt`}
+                      className={buttonVariants({ variant: "outline", size: "sm" })}
+                    >
+                      Télécharger
+                    </a>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <pre className="max-h-64 overflow-auto rounded-md bg-muted p-4 text-xs whitespace-pre-wrap">
@@ -74,6 +102,26 @@ export default async function AssetsPage({
             ))
           )}
         </div>
+
+        <Card className="mt-8">
+          <CardHeader>
+            <CardTitle className="text-base">Checklist de déploiement</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2 text-sm">
+              {DEPLOY_CHECKLIST.map((item) => (
+                <li key={item} className="flex items-start gap-2">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-4 text-xs text-muted-foreground">
+              Après chaque publication, relancez un run monitoring (avec une note)
+              pour mesurer l&apos;impact sur la part de voix.
+            </p>
+          </CardContent>
+        </Card>
       </main>
     </>
   );

@@ -111,7 +111,33 @@ function originOf(url: string) {
   return `${u.protocol}//${u.host}`;
 }
 
-export async function runTechnicalAudit(siteUrl: string): Promise<TechnicalChecks> {
+function mergeSchema(
+  a: TechnicalChecks["schema"],
+  b: TechnicalChecks["schema"],
+): TechnicalChecks["schema"] {
+  return {
+    hasFaqPage: a.hasFaqPage || b.hasFaqPage,
+    hasSoftwareApplication: a.hasSoftwareApplication || b.hasSoftwareApplication,
+    hasProduct: a.hasProduct || b.hasProduct,
+    hasOrganization: a.hasOrganization || b.hasOrganization,
+  };
+}
+
+function mergeStructure(
+  a: TechnicalChecks["structure"],
+  b: TechnicalChecks["structure"],
+): TechnicalChecks["structure"] {
+  return {
+    hasFaqSection: a.hasFaqSection || b.hasFaqSection,
+    hasComparisonHints: a.hasComparisonHints || b.hasComparisonHints,
+    hasPricingHints: a.hasPricingHints || b.hasPricingHints,
+  };
+}
+
+export async function runTechnicalAudit(
+  siteUrl: string,
+  keyPageUrls: string[] = [],
+): Promise<TechnicalChecks> {
   const origin = originOf(siteUrl);
   const homepage = await fetchSafe(siteUrl);
   const $ = cheerio.load(homepage.html);
@@ -152,6 +178,33 @@ export async function runTechnicalAudit(siteUrl: string): Promise<TechnicalCheck
   const hasVisibleDate =
     /\b(20\d{2}|mis à jour|updated|dernière mise à jour)\b/i.test(bodyText);
 
+  // Crawl des pages clés du profil (pricing, docs, blog…) sur le même domaine,
+  // pour que FAQ / comparatif / pricing ne soient pas jugés sur la homepage seule.
+  let schema = detectSchemaTypes(homepage.html);
+  let structure = detectStructure($);
+  let crawledPages = 1;
+  const extraUrls = [...new Set(keyPageUrls)]
+    .filter((u) => {
+      try {
+        return originOf(u) === origin && u !== siteUrl;
+      } catch {
+        return false;
+      }
+    })
+    .slice(0, 5);
+  for (const pageUrl of extraUrls) {
+    try {
+      const page = await fetchSafe(pageUrl);
+      if (page.statusCode !== 200) continue;
+      const $page = cheerio.load(page.html);
+      schema = mergeSchema(schema, detectSchemaTypes(page.html));
+      structure = mergeStructure(structure, detectStructure($page));
+      crawledPages++;
+    } catch {
+      // page clé injoignable — on garde le résultat homepage
+    }
+  }
+
   return {
     url: siteUrl,
     statusCode: homepage.statusCode,
@@ -163,15 +216,23 @@ export async function runTechnicalAudit(siteUrl: string): Promise<TechnicalCheck
     },
     llmsTxt: { exists: llmsExists },
     sitemap: { exists: sitemapExists, url: sitemapUrl },
-    schema: detectSchemaTypes(homepage.html),
+    schema,
     meta: {
       title: $("title").first().text() || undefined,
       description: $('meta[name="description"]').attr("content"),
       hasVisibleDate,
     },
-    structure: detectStructure($),
-    crawledPages: 1,
+    structure,
+    crawledPages,
   };
+}
+
+/** Contenu texte de la homepage, pour l'audit sémantique. */
+export async function fetchPageText(siteUrl: string): Promise<string> {
+  const page = await fetchSafe(siteUrl);
+  const $ = cheerio.load(page.html);
+  $("script,style,noscript").remove();
+  return $("body").text().replace(/\s+/g, " ").trim().slice(0, 8000);
 }
 
 export function scorePipeline(checks: TechnicalChecks) {

@@ -1,8 +1,14 @@
+import Link from "next/link";
 import { auth } from "@/auth";
 import { redirect, notFound } from "next/navigation";
-import { getSolutionWithRelations } from "@/lib/db/queries";
+import {
+  getSolutionWithRelations,
+  getRecommendations,
+  getVisibilityHistory,
+} from "@/lib/db/queries";
 import { SiteHeader, SolutionNav } from "@/components/site-header";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import {
   Card,
   CardContent,
@@ -33,6 +39,45 @@ export default async function SolutionPage({
     number
   >;
 
+  const [recs, history] = await Promise.all([
+    getRecommendations(id, session.user.id),
+    getVisibilityHistory(id, session.user.id),
+  ]);
+  const openRecs = recs.filter((r) => r.status === "pending").length;
+  const latestRun = history.runs[0] ?? null;
+
+  // Machine d'état simple : audit → monitoring → recommandations → itérer
+  const nextStep = !latestAudit
+    ? {
+        label: "Lancez votre premier audit",
+        detail: "Analyse technique du site : robots.txt, llms.txt, schema, structure.",
+        href: `/solutions/${id}/audit`,
+        cta: "Aller à l'audit",
+      }
+    : !latestRun
+      ? {
+          label: "Lancez votre baseline monitoring",
+          detail:
+            "Mesurez votre part de voix initiale sur les plateformes IA avant d'agir.",
+          href: `/solutions/${id}/monitoring`,
+          cta: "Aller au monitoring",
+        }
+      : openRecs > 0
+        ? {
+            label: `${openRecs} recommandation(s) à traiter`,
+            detail:
+              "Appliquez les actions prioritaires puis re-mesurez la part de voix.",
+            href: `/solutions/${id}/recommendations`,
+            cta: "Voir les recommandations",
+          }
+        : {
+            label: "Itérez : publiez vos assets et re-mesurez",
+            detail:
+              "Générez les assets, publiez-les sur votre site, puis relancez un run monitoring avec une note.",
+            href: `/solutions/${id}/assets`,
+            cta: "Voir les assets",
+          };
+
   return (
     <>
       <SiteHeader />
@@ -42,6 +87,19 @@ export default async function SolutionPage({
           <p className="text-muted-foreground">{solution.url}</p>
         </div>
         <SolutionNav id={id} />
+
+        <Card className="mt-6 border-primary/40">
+          <CardHeader className="pb-2">
+            <CardDescription>Prochaine étape</CardDescription>
+            <CardTitle className="text-base">{nextStep.label}</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">{nextStep.detail}</p>
+            <Link href={nextStep.href} className={buttonVariants({ size: "sm" })}>
+              {nextStep.cta}
+            </Link>
+          </CardContent>
+        </Card>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
           <Card className="lg:col-span-1">
@@ -54,10 +112,16 @@ export default async function SolutionPage({
                 {latestAudit?.overallScore ?? "—"}
                 {latestAudit ? "/100" : ""}
               </div>
+              {latestRun?.shareOfVoice != null && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Part de voix : {latestRun.shareOfVoice}% (
+                  {latestRun.ranAt.toISOString().slice(0, 10)})
+                </p>
+              )}
               <form action={runAuditAction.bind(null, id)} className="mt-4">
-                <Button type="submit" className="w-full">
+                <SubmitButton pendingLabel="Audit en cours…" className="w-full">
                   {latestAudit ? "Relancer l'audit" : "Lancer l'audit"}
-                </Button>
+                </SubmitButton>
               </form>
             </CardContent>
           </Card>

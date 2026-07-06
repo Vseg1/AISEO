@@ -2,7 +2,7 @@ import { auth } from "@/auth";
 import { redirect, notFound } from "next/navigation";
 import { getSolutionWithRelations, getLatestAudit } from "@/lib/db/queries";
 import { SiteHeader, SolutionNav } from "@/components/site-header";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import {
   Card,
   CardContent,
@@ -30,6 +30,7 @@ export default async function AuditPage({
   const audit = await getLatestAudit(id, session.user.id);
   const checks = audit?.technicalChecks as TechnicalChecks | undefined;
   const pipeline = (audit?.pipelineScores ?? {}) as Record<string, number>;
+  const semantic = (audit?.semanticScores ?? {}) as Record<string, number>;
 
   return (
     <>
@@ -40,9 +41,9 @@ export default async function AuditPage({
 
         <div className="mt-6 flex gap-3">
           <form action={runAuditAction.bind(null, id)}>
-            <Button type="submit">
+            <SubmitButton pendingLabel="Audit en cours…">
               {audit ? "Relancer l'audit" : "Lancer l'audit"}
-            </Button>
+            </SubmitButton>
           </form>
         </div>
 
@@ -70,6 +71,32 @@ export default async function AuditPage({
               ))}
             </div>
 
+            {Object.keys(semantic).length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Intent match (audit sémantique)</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {Object.entries(semantic).map(([query, score]) => (
+                    <div key={query} className="flex items-center justify-between gap-4">
+                      <span className="truncate">{query}</span>
+                      <Badge
+                        variant={
+                          score >= 70 ? "default" : score >= 40 ? "secondary" : "outline"
+                        }
+                      >
+                        {score}/100
+                      </Badge>
+                    </div>
+                  ))}
+                  <p className="pt-2 text-xs text-muted-foreground">
+                    Évalué par Gemini : la homepage répond-elle directement à chaque
+                    requête cible ?
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
             {checks && (
               <Card>
                 <CardHeader>
@@ -80,15 +107,20 @@ export default async function AuditPage({
                   <Check ok={checks.robotsTxt.exists} label="robots.txt présent" />
                   <Check ok={checks.robotsTxt.allowsAiBots.GPTBot} label="GPTBot autorisé" />
                   <Check ok={checks.robotsTxt.allowsAiBots.PerplexityBot} label="PerplexityBot autorisé" />
+                  <Check ok={checks.robotsTxt.allowsAiBots.ClaudeBot} label="ClaudeBot autorisé" />
+                  <Check ok={checks.robotsTxt.allowsAiBots["Google-Extended"]} label="Google-Extended autorisé" />
                   <Check ok={checks.llmsTxt.exists} label="llms.txt présent" />
                   <Check ok={checks.sitemap.exists} label="sitemap.xml présent" />
                   <Check ok={checks.schema.hasFaqPage} label="Schema FAQPage" />
                   <Check ok={checks.schema.hasSoftwareApplication} label="Schema SoftwareApplication" />
+                  <Check ok={checks.schema.hasOrganization} label="Schema Organization" />
+                  <Check ok={Boolean(checks.meta.description)} label="Meta description" />
                   <Check ok={checks.meta.hasVisibleDate} label="Date de mise à jour visible" />
                   <Check ok={checks.structure.hasFaqSection} label="Section FAQ détectée" />
                   <Check ok={checks.structure.hasComparisonHints} label="Contenu comparatif détecté" />
                   <p className="pt-2 text-muted-foreground">
-                    Temps de réponse : {checks.responseTimeMs}ms
+                    Temps de réponse : {checks.responseTimeMs}ms —{" "}
+                    {checks.crawledPages} page(s) analysée(s)
                   </p>
                 </CardContent>
               </Card>

@@ -12,7 +12,7 @@ import {
   visibilityRuns,
   visibilityResults,
 } from "../../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -22,6 +22,7 @@ import {
   scorePlatforms,
   overallScore,
 } from "@/lib/audit/engine";
+import { runSemanticAudit } from "@/lib/audit/semantic";
 import { buildRecommendations } from "@/lib/recommendations/rules";
 import {
   generateLlmsTxt,
@@ -30,8 +31,13 @@ import {
   generateSchemaFaq,
   generateFaqDraft,
   generateComparisonDraft,
+  buildFaqQuestions,
 } from "@/lib/generate/assets";
-import { runVisibilityMonitor, computeShareOfVoice } from "@/lib/monitor/platforms";
+import {
+  runVisibilityMonitor,
+  computeShareOfVoice,
+  computePlatformSov,
+} from "@/lib/monitor/platforms";
 import { getSolutionForUser } from "@/lib/db/queries";
 
 const solutionSchema = z.object({
@@ -58,6 +64,76 @@ function splitLines(s?: string) {
     .split("\n")
     .map((x) => x.trim())
     .filter(Boolean);
+}
+
+/** Audit technique + sémantique + recommandations pour une solution. */
+async function performAudit(solution: {
+  id: string;
+  url: string;
+  keyPages: Record<string, string> | null;
+}) {
+  const db = getDb();
+  const queries = await db
+    .select()
+    .from(targetQueries)
+    .where(eq(targetQueries.solutionId, solution.id));
+
+  const keyPageUrls = Object.values(solution.keyPages ?? {});
+  const checks = await runTechnicalAudit(solution.url, keyPageUrls);
+  const semanticScores = await runSemanticAudit(
+    solution.url,
+    queries.map((q) => q.query),
+  );
+  const pipeline = scorePipeline(checks);
+  const platforms = scorePlatforms(checks);
+  const score = overallScore(pipeline);
+
+  const [audit] = await db
+    .insert(audits)
+    .values({
+      solutionId: solution.id,
+      technicalChecks: checks,
+      semanticScores,
+      platformScores: platforms,
+      pipelineScores: pipeline,
+      overallScore: score,
+    })
+    .returning();
+
+  // On ne remplace que les recommandations non traitées : les done/skipped
+  // sont conservées pour le suivi du pilote.
+  await db
+    .delete(recommendations)
+    .where(
+      and(
+        eq(recommendations.solutionId, solution.id),
+        eq(recommendations.status, "pending"),
+      ),
+    );
+
+  const existing = await db
+    .select({ title: recommendations.title })
+    .from(recommendations)
+    .where(eq(recommendations.solutionId, solution.id));
+  const existingTitles = new Set(existing.map((r) => r.title));
+
+  const recs = buildRecommendations(checks).filter(
+    (r) => !existingTitles.has(r.title),
+  );
+  if (recs.length) {
+    await db.insert(recommendations).values(
+      recs.map((r) => ({
+        solutionId: solution.id,
+        auditId: audit.id,
+        title: r.title,
+        description: r.description,
+        tier: r.tier,
+        effort: r.effort,
+        priority: r.priority,
+        assetType: r.assetType ?? null,
+      })),
+    );
+  }
 }
 
 export async function createSolution(formData: FormData) {
@@ -126,6 +202,13 @@ export async function createSolution(formData: FormData) {
     );
   }
 
+  // Auto-audit : le CTA onboarding promet « Créer et analyser »
+  try {
+    await performAudit(solution);
+  } catch {
+    // site injoignable — l'utilisateur pourra relancer l'audit manuellement
+  }
+
   redirect(`/solutions/${solution.id}`);
 }
 
@@ -136,47 +219,145 @@ export async function runAuditAction(solutionId: string) {
   const solution = await getSolutionForUser(solutionId, session.user.id);
   if (!solution) throw new Error("Solution introuvable");
 
-  const checks = await runTechnicalAudit(solution.url);
-  const pipeline = scorePipeline(checks);
-  const platforms = scorePlatforms(checks);
-  const score = overallScore(pipeline);
-
-  const db = getDb();
-  const [audit] = await db
-    .insert(audits)
-    .values({
-      solutionId,
-      technicalChecks: checks,
-      semanticScores: {},
-      platformScores: platforms,
-      pipelineScores: pipeline,
-      overallScore: score,
-    })
-    .returning();
-
-  await db
-    .delete(recommendations)
-    .where(eq(recommendations.solutionId, solutionId));
-
-  const recs = buildRecommendations(checks);
-  if (recs.length) {
-    await db.insert(recommendations).values(
-      recs.map((r) => ({
-        solutionId,
-        auditId: audit.id,
-        title: r.title,
-        description: r.description,
-        tier: r.tier,
-        effort: r.effort,
-        priority: r.priority,
-        assetType: r.assetType ?? null,
-      })),
-    );
-  }
+  await performAudit(solution);
 
   revalidatePath(`/solutions/${solutionId}`);
   revalidatePath(`/solutions/${solutionId}/audit`);
+  revalidatePath(`/solutions/${solutionId}/recommendations`);
 }
+
+// ---------------------------------------------------------------------------
+// Édition du profil solution (settings)
+// ---------------------------------------------------------------------------
+
+const updateSchema = z.object({
+  name: z.string().min(1),
+  url: z.string().url(),
+  description: z.string().min(1),
+  language: z.string().min(1),
+  markets: z.string().optional(),
+  monitoringEnabled: z.boolean(),
+});
+
+export async function updateSolution(solutionId: string, formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Non authentifié");
+  const solution = await getSolutionForUser(solutionId, session.user.id);
+  if (!solution) throw new Error("Solution introuvable");
+
+  const parsed = updateSchema.parse({
+    name: formData.get("name"),
+    url: formData.get("url"),
+    description: formData.get("description")?.toString(),
+    language: formData.get("language") || "fr",
+    markets: formData.get("markets")?.toString(),
+    monitoringEnabled: formData.get("monitoringEnabled") === "on",
+  });
+
+  const db = getDb();
+  await db
+    .update(solutions)
+    .set({
+      name: parsed.name,
+      url: parsed.url,
+      description: parsed.description,
+      language: parsed.language,
+      markets: splitLines(parsed.markets),
+      monitoringEnabled: parsed.monitoringEnabled,
+      updatedAt: new Date(),
+    })
+    .where(eq(solutions.id, solutionId));
+
+  revalidatePath(`/solutions/${solutionId}`);
+  revalidatePath(`/solutions/${solutionId}/settings`);
+}
+
+export async function addTargetQuery(solutionId: string, formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Non authentifié");
+  const solution = await getSolutionForUser(solutionId, session.user.id);
+  if (!solution) throw new Error("Solution introuvable");
+
+  const query = formData.get("query")?.toString().trim();
+  if (!query) return;
+
+  const db = getDb();
+  await db.insert(targetQueries).values({ solutionId, query });
+  await db
+    .update(solutions)
+    .set({ updatedAt: new Date() })
+    .where(eq(solutions.id, solutionId));
+
+  revalidatePath(`/solutions/${solutionId}/settings`);
+  revalidatePath(`/solutions/${solutionId}`);
+}
+
+export async function deleteTargetQuery(
+  solutionId: string,
+  queryId: string,
+) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Non authentifié");
+  const solution = await getSolutionForUser(solutionId, session.user.id);
+  if (!solution) throw new Error("Solution introuvable");
+
+  const db = getDb();
+  await db
+    .delete(targetQueries)
+    .where(
+      and(
+        eq(targetQueries.id, queryId),
+        eq(targetQueries.solutionId, solutionId),
+      ),
+    );
+
+  revalidatePath(`/solutions/${solutionId}/settings`);
+  revalidatePath(`/solutions/${solutionId}`);
+}
+
+export async function addCompetitor(solutionId: string, formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Non authentifié");
+  const solution = await getSolutionForUser(solutionId, session.user.id);
+  if (!solution) throw new Error("Solution introuvable");
+
+  const name = formData.get("name")?.toString().trim();
+  if (!name) return;
+  const url = formData.get("url")?.toString().trim() || null;
+
+  const db = getDb();
+  await db.insert(competitors).values({ solutionId, name, url });
+
+  revalidatePath(`/solutions/${solutionId}/settings`);
+  revalidatePath(`/solutions/${solutionId}`);
+}
+
+export async function deleteCompetitor(
+  solutionId: string,
+  competitorId: string,
+) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Non authentifié");
+  const solution = await getSolutionForUser(solutionId, session.user.id);
+  if (!solution) throw new Error("Solution introuvable");
+
+  const db = getDb();
+  await db
+    .delete(competitors)
+    .where(
+      and(
+        eq(competitors.id, competitorId),
+        eq(competitors.solutionId, solutionId),
+      ),
+    );
+
+  revalidatePath(`/solutions/${solutionId}/settings`);
+  revalidatePath(`/solutions/${solutionId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Recommandations & assets
+// ---------------------------------------------------------------------------
 
 export async function updateRecommendationStatus(
   recommendationId: string,
@@ -196,15 +377,17 @@ export async function updateRecommendationStatus(
   revalidatePath(`/solutions/${solutionId}/recommendations`);
 }
 
+export type AssetType =
+  | "llms_txt"
+  | "schema_faq"
+  | "schema_software"
+  | "faq_draft"
+  | "comparison_draft"
+  | "robots_txt";
+
 export async function generateAssetAction(
   solutionId: string,
-  assetType:
-    | "llms_txt"
-    | "schema_faq"
-    | "schema_software"
-    | "faq_draft"
-    | "comparison_draft"
-    | "robots_txt",
+  assetType: AssetType,
 ) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Non authentifié");
@@ -213,16 +396,25 @@ export async function generateAssetAction(
   const solution = await getSolutionForUser(solutionId, session.user.id);
   if (!solution) throw new Error("Solution introuvable");
 
-  const comps = await db
-    .select()
-    .from(competitors)
-    .where(eq(competitors.solutionId, solutionId));
+  const [comps, queries] = await Promise.all([
+    db
+      .select()
+      .from(competitors)
+      .where(eq(competitors.solutionId, solutionId)),
+    db
+      .select()
+      .from(targetQueries)
+      .where(eq(targetQueries.solutionId, solutionId)),
+  ]);
+  const queryTexts = queries.map((q) => q.query);
 
   const profile = {
     name: solution.name,
     url: solution.url,
     description: solution.description,
     category: solution.category,
+    language: solution.language,
+    markets: solution.markets ?? [],
     personas: solution.personas ?? [],
     useCases: solution.useCases ?? [],
     integrations: solution.integrations ?? [],
@@ -234,7 +426,7 @@ export async function generateAssetAction(
 
   switch (assetType) {
     case "llms_txt":
-      content = generateLlmsTxt(profile, keyPages);
+      content = generateLlmsTxt(profile, keyPages, comps, queryTexts);
       title = "llms.txt";
       break;
     case "robots_txt":
@@ -242,24 +434,15 @@ export async function generateAssetAction(
       title = "robots.txt";
       break;
     case "schema_software":
-      content = generateSchemaSoftware(profile);
+      content = generateSchemaSoftware(profile, keyPages);
       title = "SoftwareApplication JSON-LD";
       break;
     case "schema_faq":
-      content = generateSchemaFaq(profile, [
-        {
-          q: `Qu'est-ce que ${profile.name} ?`,
-          a: profile.description ?? `${profile.name} est une solution SaaS.`,
-        },
-        {
-          q: `Pour qui est ${profile.name} ?`,
-          a: `Idéal pour ${profile.personas[0] ?? "équipes professionnelles"}.`,
-        },
-      ]);
+      content = generateSchemaFaq(profile, buildFaqQuestions(profile, queryTexts));
       title = "FAQPage JSON-LD";
       break;
     case "faq_draft":
-      content = generateFaqDraft(profile);
+      content = generateFaqDraft(profile, queryTexts);
       title = "Brouillon FAQ";
       break;
     case "comparison_draft":
@@ -268,14 +451,45 @@ export async function generateAssetAction(
       break;
   }
 
-  await db
-    .insert(generatedAssets)
-    .values({ solutionId, type: assetType, title, content });
+  // Upsert par type : régénérer remplace la version précédente
+  const [existing] = await db
+    .select({ id: generatedAssets.id })
+    .from(generatedAssets)
+    .where(
+      and(
+        eq(generatedAssets.solutionId, solutionId),
+        eq(generatedAssets.type, assetType),
+      ),
+    );
+
+  if (existing) {
+    await db
+      .update(generatedAssets)
+      .set({ title, content, updatedAt: new Date() })
+      .where(eq(generatedAssets.id, existing.id));
+  } else {
+    await db
+      .insert(generatedAssets)
+      .values({ solutionId, type: assetType, title, content });
+  }
 
   revalidatePath(`/solutions/${solutionId}/assets`);
 }
 
-export async function runMonitorAction(solutionId: string) {
+/** Génère l'asset lié à une reco depuis la page recommandations. */
+export async function generateAssetFromRecommendation(
+  solutionId: string,
+  assetType: AssetType,
+) {
+  await generateAssetAction(solutionId, assetType);
+  redirect(`/solutions/${solutionId}/assets`);
+}
+
+// ---------------------------------------------------------------------------
+// Monitoring
+// ---------------------------------------------------------------------------
+
+export async function runMonitorAction(solutionId: string, formData?: FormData) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Non authentifié");
 
@@ -302,13 +516,16 @@ export async function runMonitorAction(solutionId: string) {
     solution.name,
     solution.url,
     comps.map((c) => c.name),
+    solution.language ?? "fr",
   );
 
-  const shareOfVoice = computeShareOfVoice(results, (r) => r.mentioned);
+  const shareOfVoice = computeShareOfVoice(results);
+  const platformSov = computePlatformSov(results);
+  const note = formData?.get("note")?.toString().trim() || null;
 
   const [run] = await db
     .insert(visibilityRuns)
-    .values({ solutionId, shareOfVoice })
+    .values({ solutionId, shareOfVoice, platformSov, note })
     .returning();
 
   await db.insert(visibilityResults).values(
@@ -317,6 +534,7 @@ export async function runMonitorAction(solutionId: string) {
       platform: r.platform,
       query: r.query,
       mentioned: r.mentioned,
+      configured: r.configured,
       mentionRank: r.mentionRank,
       sources: r.sources,
       competitorsMentioned: r.competitorsMentioned,
@@ -325,4 +543,5 @@ export async function runMonitorAction(solutionId: string) {
   );
 
   revalidatePath(`/solutions/${solutionId}/monitoring`);
+  revalidatePath(`/solutions/${solutionId}`);
 }

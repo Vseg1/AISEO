@@ -1,4 +1,4 @@
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, count, inArray } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   solutions,
@@ -95,9 +95,13 @@ export async function getAssets(solutionId: string, userId: string) {
     .orderBy(desc(generatedAssets.updatedAt));
 }
 
-export async function getVisibilityHistory(solutionId: string, userId: string) {
+export async function getVisibilityHistory(
+  solutionId: string,
+  userId: string,
+  runId?: string,
+) {
   const solution = await getSolutionForUser(solutionId, userId);
-  if (!solution) return { runs: [], latestResults: [] };
+  if (!solution) return { runs: [], selectedRun: null, selectedResults: [] };
   const db = getDb();
   const runs = await db
     .select()
@@ -105,12 +109,53 @@ export async function getVisibilityHistory(solutionId: string, userId: string) {
     .where(eq(visibilityRuns.solutionId, solutionId))
     .orderBy(desc(visibilityRuns.ranAt))
     .limit(20);
-  if (runs.length === 0) return { runs: [], latestResults: [] };
+  if (runs.length === 0) {
+    return { runs: [], selectedRun: null, selectedResults: [] };
+  }
+  const selectedRun = runs.find((r) => r.id === runId) ?? runs[0];
   const results = await db
     .select()
     .from(visibilityResults)
-    .where(eq(visibilityResults.runId, runs[0].id));
-  return { runs, latestResults: results };
+    .where(eq(visibilityResults.runId, selectedRun.id));
+  return { runs, selectedRun, selectedResults: results };
+}
+
+/** Métriques agrégées par solution pour le dashboard. */
+export async function getDashboardSummaries(userId: string) {
+  const db = getDb();
+  const items = await getSolutionsForUser(userId);
+  if (!items.length) return [];
+  const ids = items.map((s) => s.id);
+
+  const [latestAudits, latestRuns, openRecs] = await Promise.all([
+    db
+      .select()
+      .from(audits)
+      .where(inArray(audits.solutionId, ids))
+      .orderBy(desc(audits.ranAt)),
+    db
+      .select()
+      .from(visibilityRuns)
+      .where(inArray(visibilityRuns.solutionId, ids))
+      .orderBy(desc(visibilityRuns.ranAt)),
+    db
+      .select({ solutionId: recommendations.solutionId, n: count() })
+      .from(recommendations)
+      .where(
+        and(
+          inArray(recommendations.solutionId, ids),
+          eq(recommendations.status, "pending"),
+        ),
+      )
+      .groupBy(recommendations.solutionId),
+  ]);
+
+  return items.map((s) => {
+    const audit = latestAudits.find((a) => a.solutionId === s.id) ?? null;
+    const run = latestRuns.find((r) => r.solutionId === s.id) ?? null;
+    const recs = openRecs.find((r) => r.solutionId === s.id)?.n ?? 0;
+    return { solution: s, latestAudit: audit, latestRun: run, openRecommendations: recs };
+  });
 }
 
 export {

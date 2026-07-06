@@ -28,6 +28,7 @@ export function SolutionNav({ id }: { id: string }) {
     { href: `/solutions/${id}/recommendations`, label: "Recommandations" },
     { href: `/solutions/${id}/assets`, label: "Assets" },
     { href: `/solutions/${id}/monitoring`, label: "Monitoring" },
+    { href: `/solutions/${id}/settings`, label: "Paramètres" },
   ];
   return (
     <nav className="flex flex-wrap gap-2 border-b pb-3">

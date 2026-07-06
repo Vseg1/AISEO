@@ -61,6 +61,30 @@ export function buildRecommendations(
     });
   }
 
+  if (!checks.robotsTxt.allowsAiBots.ClaudeBot) {
+    recs.push({
+      title: "Autoriser ClaudeBot",
+      description:
+        "ClaudeBot alimente les réponses de Claude — le bloquer vous exclut de cette plateforme Tier 2.",
+      tier: "claude",
+      effort: "faible",
+      priority: "moyenne",
+      assetType: "robots_txt",
+    });
+  }
+
+  if (!checks.robotsTxt.allowsAiBots["Google-Extended"]) {
+    recs.push({
+      title: "Autoriser Google-Extended",
+      description:
+        "Google-Extended alimente Gemini — le bloquer réduit votre visibilité dans les réponses Gemini.",
+      tier: "google_aio",
+      effort: "faible",
+      priority: "moyenne",
+      assetType: "robots_txt",
+    });
+  }
+
   if (!checks.schema.hasFaqPage) {
     recs.push({
       title: "Ajouter un schema FAQPage",
@@ -133,6 +157,41 @@ export function buildRecommendations(
     });
   }
 
+  if (!checks.schema.hasOrganization) {
+    recs.push({
+      title: "Ajouter un schema Organization",
+      description:
+        "Le schema Organization établit l'entité de votre marque — signal de confiance pour tous les agents IA.",
+      tier: "transversal",
+      effort: "faible",
+      priority: "moyenne",
+      assetType: null,
+    });
+  }
+
+  if (!checks.meta.description) {
+    recs.push({
+      title: "Renseigner la meta description",
+      description:
+        "La meta description est souvent reprise telle quelle par les agents — 150–160 caractères, answer-first.",
+      tier: "transversal",
+      effort: "faible",
+      priority: "haute",
+      assetType: null,
+    });
+  }
+
+  if (checks.responseTimeMs >= 3000) {
+    recs.push({
+      title: "Améliorer le temps de réponse serveur",
+      description: `Votre page répond en ${Math.round(checks.responseTimeMs / 100) / 10}s — au-delà de 3s les crawlers IA abandonnent souvent le fetch.`,
+      tier: "transversal",
+      effort: "moyen",
+      priority: "haute",
+      assetType: null,
+    });
+  }
+
   if (!checks.structure.hasPricingHints) {
     recs.push({
       title: "Page pricing indexable",
@@ -155,5 +214,6 @@ export function buildRecommendations(
     assetType: null,
   });
 
-  return recs;
+  const order = { haute: 0, moyenne: 1, basse: 2 };
+  return recs.sort((a, b) => order[a.priority] - order[b.priority]);
 }
